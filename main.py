@@ -5,6 +5,11 @@ from google.cloud import storage
 import os
 import json
 from flask import jsonify
+from flask import Flask, request, jsonify
+import hmac
+import hashlib
+import base64
+from functools import wraps
 
 # Initialize the Cloud Storage client
 storage_client = storage.Client()
@@ -148,10 +153,72 @@ def check_reminders(alert_data):
     if reminder_items:
         send_inventory_alert(reminder_items, is_reminder=True)
 
-def main(request):
-    print("Starting inventory check...")
-    check_inventory()
-    return jsonify({"status": "Inventory check complete"}), 200
+app = Flask(__name__)
+
+def verify_shopify_webhook(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Get Shopify webhook signature
+        shopify_hmac = request.headers.get('X-Shopify-Hmac-Sha256')
+        
+        if not shopify_hmac:
+            return jsonify({"error": "No Shopify HMAC present"}), 403
+        
+        # Calculate expected HMAC
+        shopify_webhook_secret = os.getenv('SHOPIFY_WEBHOOK_SECRET')
+        digest = hmac.new(
+            shopify_webhook_secret.encode('utf-8'),
+            request.get_data(),
+            hashlib.sha256
+        ).digest()
+        calculated_hmac = base64.b64encode(digest).decode('utf-8')
+        
+        # Compare signatures
+        if not hmac.compare_digest(calculated_hmac, shopify_hmac):
+            return jsonify({"error": "Invalid Shopify webhook signature"}), 403
+            
+        return f(*args, **kwargs)
+    return decorated_function
+
+def verify_cloud_scheduler(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Get Cloud Scheduler authentication header
+        auth_header = request.headers.get('Authorization', '')
+        
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "No authorization header"}), 403
+            
+        # Verify the token is from Cloud Scheduler
+        try:
+            # The token will be automatically verified by Cloud Run
+            # If this point is reached, the request is authenticated
+            return f(*args, **kwargs)
+        except Exception as e:
+            return jsonify({"error": "Invalid authorization"}), 403
+            
+    return decorated_function
+
+@app.route('/', methods=['POST'])
+@verify_shopify_webhook
+def handle_order_webhook():
+    """Handle new order webhooks from Shopify"""
+    try:
+        check_inventory()
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/check-reminders', methods=['POST'])
+@verify_cloud_scheduler
+def handle_reminder_check():
+    """Handle scheduled reminder checks"""
+    try:
+        alert_data = load_inventory_alerts()
+        check_reminders(alert_data)
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    main(None) 
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))) 
