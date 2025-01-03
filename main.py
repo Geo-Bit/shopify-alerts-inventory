@@ -4,11 +4,6 @@ from google.cloud import secretmanager
 from google.cloud import storage
 import os
 import json
-from flask import jsonify
-from flask import Flask, request, jsonify
-import hmac
-import hashlib
-import base64
 from functools import wraps
 
 # Initialize the Cloud Storage client
@@ -19,6 +14,25 @@ bucket = storage_client.bucket(bucket_name)
 # Configuration
 INVENTORY_THRESHOLD = 2
 REMINDER_DAYS = 7  # Number of days before sending a reminder
+
+def access_secret(secret_name):
+    client = secretmanager.SecretManagerServiceClient()
+    project_id = os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT')
+    name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode("UTF-8")
+
+# Access all required secrets
+SHOPIFY_ACCESS_TOKEN = access_secret("SHOPIFY_INV_ACCESS_TOKEN")
+print("Accessed SHOPIFY_INV_ACCESS_TOKEN from Secret Manager.")
+SHOPIFY_STORE_NAME = access_secret("SHOPIFY_STORE_NAME")
+print("Accessed SHOPIFY_STORE_NAME from Secret Manager.")
+SENDGRID_API_KEY = access_secret("SENDGRID_INV_API_KEY")
+print("Accessed SENDGRID_API_KEY from Secret Manager.")
+ALERT_SENDER_EMAIL = access_secret("ALERT_SENDER_EMAIL")
+print("Accessed ALERT_SENDER_EMAIL from Secret Manager.")
+ALERT_RECIPIENT_EMAIL = access_secret("ALERT_RECIPIENT_EMAIL")
+print("Accessed ALERT_RECIPIENT_EMAIL from Secret Manager.")
 
 def load_inventory_alerts():
     try:
@@ -153,72 +167,19 @@ def check_reminders(alert_data):
     if reminder_items:
         send_inventory_alert(reminder_items, is_reminder=True)
 
-app = Flask(__name__)
-
-def verify_shopify_webhook(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Get Shopify webhook signature
-        shopify_hmac = request.headers.get('X-Shopify-Hmac-Sha256')
-        
-        if not shopify_hmac:
-            return jsonify({"error": "No Shopify HMAC present"}), 403
-        
-        # Calculate expected HMAC
-        shopify_webhook_secret = os.getenv('SHOPIFY_WEBHOOK_SECRET')
-        digest = hmac.new(
-            shopify_webhook_secret.encode('utf-8'),
-            request.get_data(),
-            hashlib.sha256
-        ).digest()
-        calculated_hmac = base64.b64encode(digest).decode('utf-8')
-        
-        # Compare signatures
-        if not hmac.compare_digest(calculated_hmac, shopify_hmac):
-            return jsonify({"error": "Invalid Shopify webhook signature"}), 403
-            
-        return f(*args, **kwargs)
-    return decorated_function
-
-def verify_cloud_scheduler(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Get Cloud Scheduler authentication header
-        auth_header = request.headers.get('Authorization', '')
-        
-        if not auth_header.startswith('Bearer '):
-            return jsonify({"error": "No authorization header"}), 403
-            
-        # Verify the token is from Cloud Scheduler
-        try:
-            # The token will be automatically verified by Cloud Run
-            # If this point is reached, the request is authenticated
-            return f(*args, **kwargs)
-        except Exception as e:
-            return jsonify({"error": "Invalid authorization"}), 403
-            
-    return decorated_function
-
-@app.route('/', methods=['POST'])
-@verify_shopify_webhook
-def handle_order_webhook():
-    """Handle new order webhooks from Shopify"""
+def handle_webhook(event, context):
+    """Triggered from a Pub/Sub message
+    Args:
+         event (dict): Event payload.
+         context (google.cloud.functions.Context): Metadata for the event.
+    """
     try:
+        pubsub_message = base64.b64decode(event['data']).decode('utf-8')
+        order_data = json.loads(pubsub_message)
+        
+        # Use our existing inventory check logic
         check_inventory()
-        return jsonify({"status": "success"}), 200
+        return 'OK'
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/check-reminders', methods=['POST'])
-@verify_cloud_scheduler
-def handle_reminder_check():
-    """Handle scheduled reminder checks"""
-    try:
-        alert_data = load_inventory_alerts()
-        check_reminders(alert_data)
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))) 
+        print(f"Error processing message: {e}")
+        raise 
