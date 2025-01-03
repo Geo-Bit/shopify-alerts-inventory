@@ -5,6 +5,9 @@ from google.cloud import storage
 import os
 import json
 from functools import wraps
+import base64
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 # Initialize the Cloud Storage client
 storage_client = storage.Client()
@@ -17,22 +20,27 @@ REMINDER_DAYS = 7  # Number of days before sending a reminder
 
 def access_secret(secret_name):
     client = secretmanager.SecretManagerServiceClient()
-    project_id = os.getenv('GCP_PROJECT') or os.getenv('GOOGLE_CLOUD_PROJECT')
+    # Explicitly set the project ID instead of relying on environment variables
+    project_id = "lowsinthe70s"  # Hardcode your project ID
     name = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
-    response = client.access_secret_version(request={"name": name})
-    return response.payload.data.decode("UTF-8")
+    try:
+        response = client.access_secret_version(request={"name": name})
+        return response.payload.data.decode("UTF-8")
+    except Exception as e:
+        print(f"Error accessing secret {secret_name}: {e}")
+        raise
 
 # Access all required secrets
 SHOPIFY_ACCESS_TOKEN = access_secret("SHOPIFY_INV_ACCESS_TOKEN")
 print("Accessed SHOPIFY_INV_ACCESS_TOKEN from Secret Manager.")
 SHOPIFY_STORE_NAME = access_secret("SHOPIFY_STORE_NAME")
 print("Accessed SHOPIFY_STORE_NAME from Secret Manager.")
-SENDGRID_API_KEY = access_secret("SENDGRID_INV_API_KEY")
+SENDGRID_API_KEY = access_secret("SENDGRID_API_KEY")
 print("Accessed SENDGRID_API_KEY from Secret Manager.")
-ALERT_SENDER_EMAIL = access_secret("ALERT_SENDER_EMAIL")
-print("Accessed ALERT_SENDER_EMAIL from Secret Manager.")
-ALERT_RECIPIENT_EMAIL = access_secret("ALERT_RECIPIENT_EMAIL")
-print("Accessed ALERT_RECIPIENT_EMAIL from Secret Manager.")
+
+# Instead, get them from environment variables
+ALERT_SENDER_EMAIL = os.getenv('ALERT_SENDER_EMAIL')
+ALERT_RECIPIENT_EMAIL = os.getenv('ALERT_RECIPIENT_EMAIL')
 
 def load_inventory_alerts():
     try:
