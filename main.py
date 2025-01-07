@@ -128,7 +128,7 @@ def send_inventory_alert(items, is_reminder=False):
     from sendgrid.helpers.mail import Mail
 
     sender_email = os.getenv('ALERT_SENDER_EMAIL')
-    recipient_emails = [email.strip() for email in os.getenv('ALERT_RECIPIENT_EMAIL').split(',')]
+    recipient_emails = ALERT_RECIPIENT_EMAIL
 
     subject = "Low Inventory Alert" if not is_reminder else "Low Inventory Reminder"
     body_lines = ["The following items have low inventory:\n"]
