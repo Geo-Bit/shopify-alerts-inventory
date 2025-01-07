@@ -15,8 +15,8 @@ bucket_name = os.getenv('GCS_BUCKET_NAME')
 bucket = storage_client.bucket(bucket_name)
 
 # Configuration
-INVENTORY_THRESHOLD = 2
-REMINDER_DAYS = 7  # Number of days before sending a reminder
+INVENTORY_THRESHOLD = 2 # Send an alert when inventory is less than this number for a particular item
+REMINDER_DAYS = 1  # Number of days before sending a reminder
 
 def access_secret(secret_name):
     client = secretmanager.SecretManagerServiceClient()
